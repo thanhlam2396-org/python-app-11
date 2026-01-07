@@ -1,0 +1,13 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: python-app-11
+  description: Python app that displays time - named python-app-11
+  annotations:
+    github.com/project-slug: thanhlam2396-org/python-app-11
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: service
+  owner: development
+
+  lifecycle: experimental

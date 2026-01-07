@@ -1,0 +1,98 @@
+name: python-app-11-cicd
+
+on:
+  push:
+    paths:
+      - src/**
+    branches:
+      - main
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Shorten commit id
+        run: echo "COMMIT_ID=${GITHUB_SHA::6}" >> "$GITHUB_ENV"
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: thanhlam2396/python-app-11:${{ env.COMMIT_ID }}
+
+    outputs:
+      commit_id: ${{ env.COMMIT_ID }}
+
+  cd:
+    needs: ci
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Modify values file
+        id: modify-values
+        uses: mikefarah/yq@master
+        with:
+          cmd: yq -i '.image.tag = "${{ needs.ci.outputs.commit_id }}"' charts/python-app-11/values-dev.yaml
+
+      - name: Commit and push changes
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: 'charts/python-app-11/values-dev.yaml'
+          message: 'ci: update image.tag to ${{ needs.ci.outputs.commit_id }}'
+          push: true
+
+      - name: Install ArgoCD CLI
+        run: |
+          mkdir -p $HOME/bin
+          curl -sSL https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 -o $HOME/bin/argocd
+          chmod +x $HOME/bin/argocd
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: ArgoCD Login
+        run: |
+          argocd login argocd-server.argocd \
+            --insecure \
+            --grpc-web \
+            --username admin \
+            --password ${{ secrets.ARGOCD_PASSWORD }}
+
+      - name: Ensure ArgoCD Application
+        run: |
+          repo="https://github.com/thanhlam2396-org/python-app-11.git"
+
+          argocd repo list | grep -q "$repo" || argocd repo add "$repo" --upsert
+
+          if argocd app get python-app-11 >/dev/null 2>&1; then
+            argocd app set python-app-11 \
+              --repo "$repo" \
+              --path charts/python-app-11 \
+              --dest-namespace dev \
+              --dest-server https://kubernetes.default.svc \
+              --revision main \
+              --sync-policy manual \
+              --sync-option CreateNamespace=true
+          else
+            argocd app create python-app-11 \
+              --repo "$repo" \
+              --path charts/python-app-11 \
+              --dest-namespace dev \
+              --dest-server https://kubernetes.default.svc \
+              --revision main \
+              --sync-policy manual \
+              --sync-option CreateNamespace=true
+          fi
+
+          # Override image tag ngay lập tức trong ArgoCD (đảm bảo deploy đúng version mới)
+          argocd app set python-app-11 --helm-set image.tag=${{ needs.ci.outputs.commit_id }}
+
+      - name: ArgoCD Sync and Wait
+        run: |
+          argocd app sync python-app-11
+          argocd app wait python-app-11 --timeout 300
